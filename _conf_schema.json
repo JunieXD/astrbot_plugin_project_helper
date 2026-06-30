@@ -26,6 +26,12 @@
             "default": "",
             "hint": "用于状态展示和 QA 文档标题。"
           },
+          "project_prompt": {
+            "description": "项目简介提示词",
+            "type": "text",
+            "default": "",
+            "hint": "简单介绍这个项目是做什么的、常见使用场景、哪些问题算本项目问题、哪些问题通常不属于本项目。会注入给 Agent 帮助判断是否需要回复。"
+          },
           "repo_url": {
             "description": "Git 仓库地址",
             "type": "string",

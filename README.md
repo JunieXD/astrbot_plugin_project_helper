@@ -50,6 +50,7 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 
 - `session_id`: 群/会话 ID，例如 `aiocqhttp:GroupMessage:123456789`
 - `project_name`: 项目显示名
+- `project_prompt`: 项目简介提示词，用来告诉 Agent 这个项目做什么、常见场景、哪些问题算本项目问题
 - `repo_url`: 目标项目 Git 地址，例如 `https://github.com/owner/repo.git`
 - `repo_branch`: 可选分支/tag/commit
 - `repo_path`: 本地 checkout 路径。相对路径会放到 `data/plugin_data/astrbot_plugin_project_helper/repos/`

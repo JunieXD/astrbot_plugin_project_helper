@@ -40,6 +40,7 @@ class ProjectBinding:
     repo_path: str = ""
     qa_path: str = ""
     project_name: str = ""
+    project_prompt: str = ""
     enabled: bool = True
 
     @classmethod
@@ -52,6 +53,7 @@ class ProjectBinding:
             repo_branch=str(data.get("repo_branch") or "").strip(),
             repo_path=str(data.get("repo_path") or "").strip(),
             qa_path=str(data.get("qa_path") or "").strip(),
+            project_prompt=str(data.get("project_prompt") or "").strip(),
             enabled=_as_bool(data.get("enabled"), True),
         )
 
@@ -160,6 +162,7 @@ class ProjectHelperConfig:
                     repo_branch=str(data.get("repo_branch") or "").strip(),
                     repo_path=legacy_repo_path,
                     project_name="Legacy Project",
+                    project_prompt=str(data.get("project_prompt") or "").strip(),
                     enabled=True,
                 )
                 for session in sessions
@@ -429,8 +432,15 @@ class ProjectHelperPlugin(Star):
             f"目标仓库本地路径：{repo_root}",
             f"QA Markdown 路径：{self._qa_path(project)}",
             f"平台会话：{event.unified_msg_origin}",
-            "最近连续消息：",
         ]
+        if project.project_prompt:
+            lines.extend(
+                [
+                    "项目简介/判断边界：",
+                    project.project_prompt,
+                ]
+            )
+        lines.append("最近连续消息：")
         if truncated_count:
             lines.append(f"注意：由于消息数量超过上限，前面有 {truncated_count} 条较早消息未包含。")
         for idx, item in enumerate(messages, start=1):
