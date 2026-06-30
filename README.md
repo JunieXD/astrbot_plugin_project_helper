@@ -46,19 +46,23 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 
 ## 配置
 
-核心配置在 WebUI 里填。`projects` 是项目绑定列表，一条配置表示一个群/会话绑定一个项目：
+核心配置在 WebUI 里填。`projects` 是项目绑定列表，一条配置表示一个 QQ 群绑定一个 GitHub 项目：
 
-- `session_id`: 群/会话 ID，例如 `aiocqhttp:GroupMessage:123456789`
-- `project_name`: 项目显示名
+- `group_id`: QQ 群号，只填数字，例如 `123456789`
 - `project_prompt`: 项目简介提示词，用来告诉 Agent 这个项目做什么、常见场景、哪些问题算本项目问题
-- `repo_url`: 目标项目 Git 地址，例如 `https://github.com/owner/repo.git`
-- `repo_branch`: 可选分支/tag/commit
+- `repo_url`: 目标项目 Git 地址，必填，例如 `https://github.com/owner/repo.git`
+- `repo_branch`: 可选分支/tag/commit；留空时克隆会优先尝试 `main`，其次 `master`，再退回远端默认分支
 - `repo_path`: 本地 checkout 路径。相对路径会放到 `data/plugin_data/astrbot_plugin_project_helper/repos/`
 - `qa_path`: 项目 QA Markdown 路径。相对路径会放到 `data/plugin_data/astrbot_plugin_project_helper/qa/`
+- `admin_qqs`: 处理失败时私聊通知的管理员 QQ 号列表；未配置则只写日志，不会在群里报错
 - `buffer_seconds`: 多条消息聚合等待时间，默认 15 秒
 - `max_buffer_messages`: 一次聚合最多保留的消息数，默认 20 条
 - `max_tool_calls`: 单次 Agent 最多工具调用轮数，默认 25
-- `auto_update_repo`: 每次回答前是否自动 `git fetch/pull`
+- `send_typing`: Agent 调查期间显示平台的“正在输入”状态，不会额外发送文字消息
+- `auto_update_repo`: 每次回答前是否自动 `git fetch/pull`，默认开启
+- `include_sources`: 是否要求回答末尾附简短文件依据，默认关闭
+
+项目显示名不需要单独配置，插件会直接使用 GitHub 仓库名。首次处理对应群的问题或执行 `/ph update` 时，插件会把仓库克隆到本地 `repo_path`；后续 Agent 通过只读工具检索这个本地 checkout 的代码和 Markdown。
 
 管理员命令：
 
@@ -67,7 +71,7 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 /ph update
 ```
 
-两个命令都需要管理员权限。`/ph status` 可用于查看当前会话 ID，方便复制到 `projects[].session_id`。
+两个命令都需要 AstrBot 管理员权限。`/ph status` 会显示当前群绑定、仓库路径、QA 路径和关键运行参数；`/ph update` 会立即 clone 或更新当前群绑定的仓库。
 
 ## 当前限制
 

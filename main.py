@@ -34,21 +34,23 @@ RECENT_ANSWER_TTL_SECONDS = 3600.0
 
 @dataclass(frozen=True)
 class ProjectBinding:
-    session_id: str
+    group_id: str
     repo_url: str = ""
     repo_branch: str = ""
     repo_path: str = ""
     qa_path: str = ""
-    project_name: str = ""
     project_prompt: str = ""
     enabled: bool = True
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> "ProjectBinding":
         data = data or {}
+        legacy_session = str(data.get("session_id") or data.get("target_umo") or "").strip()
+        group_id = _extract_group_id(data.get("group_id") or data.get("qq_group_id"))
+        if not group_id:
+            group_id = _extract_group_id(legacy_session)
         return cls(
-            session_id=str(data.get("session_id") or data.get("target_umo") or "").strip(),
-            project_name=str(data.get("project_name") or data.get("name") or "").strip(),
+            group_id=group_id,
             repo_url=str(data.get("repo_url") or "").strip(),
             repo_branch=str(data.get("repo_branch") or "").strip(),
             repo_path=str(data.get("repo_path") or "").strip(),
@@ -58,11 +60,7 @@ class ProjectBinding:
         )
 
     def label(self) -> str:
-        if self.project_name:
-            return self.project_name
-        if self.repo_url:
-            return self.repo_url.removesuffix(".git").rstrip("/").rsplit("/", 1)[-1] or self.repo_url
-        return self.repo_path or "(未命名项目)"
+        return _repo_name_from_url(self.repo_url) or self.repo_path or self.group_id or "(未命名项目)"
 
 
 @dataclass
@@ -95,19 +93,19 @@ class RecentAnswer:
 @dataclass(frozen=True)
 class ProjectHelperConfig:
     projects: tuple[ProjectBinding, ...] = ()
+    admin_qqs: tuple[str, ...] = ()
     buffer_seconds: float = 15.0
     max_buffer_messages: int = 20
     max_answer_chars: int = 1800
-    agent_model: str = ""
     agent_timeout_seconds: float = 300.0
     tool_timeout_seconds: int = 30
     max_tool_calls: int = 25
     conversation_ttl_seconds: float = 300.0
     respond_when_mentioned_only: bool = False
     send_typing: bool = True
-    auto_update_repo: bool = False
-    include_sources: bool = True
-    debug_reply_on_error: bool = True
+    auto_update_repo: bool = True
+    include_sources: bool = False
+    error_notify_admins: bool = True
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> "ProjectHelperConfig":
@@ -115,19 +113,22 @@ class ProjectHelperConfig:
         projects = cls._parse_projects(data)
         return cls(
             projects=projects,
+            admin_qqs=_as_string_tuple(data.get("admin_qqs") or data.get("admin_qq_ids")),
             buffer_seconds=_as_float(data.get("buffer_seconds"), 15.0, 1.0, 180.0),
             max_buffer_messages=_as_int(data.get("max_buffer_messages"), 20, 1, 100),
             max_answer_chars=_as_int(data.get("max_answer_chars"), 1800, 200, 8000),
-            agent_model=str(data.get("agent_model") or "").strip(),
             agent_timeout_seconds=_as_float(data.get("agent_timeout_seconds"), 300.0, 20.0, 1200.0),
             tool_timeout_seconds=_as_int(data.get("tool_timeout_seconds"), 30, 5, 300),
             max_tool_calls=_as_int(data.get("max_tool_calls"), 25, 1, 80),
             conversation_ttl_seconds=_as_float(data.get("conversation_ttl_seconds"), 300.0, 30.0, 3600.0),
             respond_when_mentioned_only=_as_bool(data.get("respond_when_mentioned_only"), False),
             send_typing=_as_bool(data.get("send_typing"), True),
-            auto_update_repo=_as_bool(data.get("auto_update_repo"), False),
-            include_sources=_as_bool(data.get("include_sources"), True),
-            debug_reply_on_error=_as_bool(data.get("debug_reply_on_error"), True),
+            auto_update_repo=_as_bool(data.get("auto_update_repo"), True),
+            include_sources=_as_bool(data.get("include_sources"), False),
+            error_notify_admins=_as_bool(
+                data.get("error_notify_admins", data.get("debug_reply_on_error")),
+                True,
+            ),
         )
 
     @staticmethod
@@ -139,33 +140,31 @@ class ProjectHelperConfig:
                 if not isinstance(item, dict):
                     continue
                 project = ProjectBinding.from_mapping(item)
-                if project.repo_url or project.repo_path:
+                if project.group_id:
                     projects.append(project)
 
         if projects:
             return tuple(projects)
 
         legacy_repo_url = str(data.get("repo_url") or "").strip()
-        legacy_repo_path = str(data.get("repo_path") or "target_repo").strip() or "target_repo"
-        if legacy_repo_url or legacy_repo_path:
+        legacy_repo_path = str(data.get("repo_path") or "").strip()
+        if legacy_repo_url:
             sessions = [
                 str(item).strip()
                 for item in data.get("enabled_sessions") or []
                 if str(item).strip()
             ]
-            if not sessions:
-                sessions = [""]
             return tuple(
                 ProjectBinding(
-                    session_id=session,
+                    group_id=group_id,
                     repo_url=legacy_repo_url,
                     repo_branch=str(data.get("repo_branch") or "").strip(),
                     repo_path=legacy_repo_path,
-                    project_name="Legacy Project",
                     project_prompt=str(data.get("project_prompt") or "").strip(),
                     enabled=True,
                 )
                 for session in sessions
+                if (group_id := _extract_group_id(session))
             )
         return ()
 
@@ -200,6 +199,38 @@ def _as_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _as_string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw_items = re.split(r"[\s,，;；]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = [str(item) for item in value]
+    else:
+        raw_items = [str(value)]
+    items = [item.strip() for item in raw_items if item and item.strip()]
+    return tuple(dict.fromkeys(items))
+
+
+def _extract_group_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) >= 3 and parts[-2] == MessageType.GROUP_MESSAGE.value:
+            return parts[-1].strip()
+        return ""
+    return text
+
+
+def _repo_name_from_url(repo_url: str) -> str:
+    text = str(repo_url or "").strip().removesuffix(".git").rstrip("/")
+    if not text:
+        return ""
+    return text.rsplit("/", 1)[-1].strip() or text
+
+
 def _plugin_data_dir() -> Path:
     if get_astrbot_data_path is not None:
         return Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
@@ -210,7 +241,7 @@ def _plugin_data_dir() -> Path:
     "astrbot_plugin_project_helper",
     "JunieXD",
     "Use an AstrBot agent to inspect a GitHub repository and answer project questions in group chat.",
-    "0.2.0",
+    "0.3.0",
 )
 class ProjectHelperPlugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
@@ -235,20 +266,26 @@ class ProjectHelperPlugin(Star):
         project = self._project_for_event(event)
         if project is None:
             event.set_result(
-                f"当前会话未绑定项目：{event.unified_msg_origin}\n"
-                "请在插件配置 projects 中添加一条 session_id 为当前会话 ID 的项目配置。"
+                f"当前群未绑定项目：{event.get_group_id() or '(非群聊)'}\n"
+                "请在插件配置 projects 中添加一条 QQ群号 为当前群号、Git 仓库地址非空的项目配置。"
+            )
+            return
+        if not project.repo_url:
+            event.set_result(
+                f"当前群已配置项目绑定，但 Git 仓库地址为空：{project.group_id}\n"
+                "请在插件配置 projects 中填写 Git 仓库地址。"
             )
             return
         repo_root = self._repo_root(project)
         qa_path = self._qa_path(project)
         status = [
             "Project Helper (/ph)",
-            f"session: {event.unified_msg_origin}",
+            f"group_id: {project.group_id}",
             f"project: {project.label()}",
             f"repo_path: {repo_root}",
             f"repo_exists: {repo_root.exists()}",
-            f"repo_url: {project.repo_url or '(local only)'}",
-            f"branch: {project.repo_branch or '(default)'}",
+            f"repo_url: {project.repo_url}",
+            f"branch: {project.repo_branch or '(auto: main -> master -> remote default)'}",
             f"qa_path: {qa_path}",
             f"qa_exists: {qa_path.exists()}",
             f"max_tool_calls: {self.config.max_tool_calls}",
@@ -264,7 +301,10 @@ class ProjectHelperPlugin(Star):
             return
         project = self._project_for_event(event)
         if project is None:
-            event.set_result(f"当前会话未绑定项目：{event.unified_msg_origin}")
+            event.set_result(f"当前群未绑定项目：{event.get_group_id() or '(非群聊)'}")
+            return
+        if not project.repo_url:
+            event.set_result("当前群项目绑定缺少 Git 仓库地址，请先在插件配置里填写。")
             return
         try:
             repo_root = await self._ensure_repo(project, update=True)
@@ -311,8 +351,7 @@ class ProjectHelperPlugin(Star):
             return
         except Exception as exc:
             logger.error("Project Helper processing failed: %s", exc, exc_info=True)
-            if self.config.debug_reply_on_error:
-                await event.send(MessageChain([Plain(f"项目问答处理失败：{exc}")]))
+            await self._notify_admins(event, f"项目问答处理失败：{exc}")
 
     async def _process_buffer(self, event: AstrMessageEvent, session_id: str) -> None:
         buf = self.buffers.get(session_id)
@@ -483,21 +522,21 @@ class ProjectHelperPlugin(Star):
         }
 
     def _project_for_event(self, event: AstrMessageEvent) -> ProjectBinding | None:
-        return self._project_for_session(event.unified_msg_origin)
+        return self._project_for_group(event.get_group_id())
 
-    def _project_for_session(self, session_id: str) -> ProjectBinding | None:
-        fallback: ProjectBinding | None = None
+    def _project_for_group(self, group_id: str) -> ProjectBinding | None:
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return None
         for project in self.config.projects:
             if not project.enabled:
                 continue
-            if project.session_id == session_id:
+            if project.group_id == group_id:
                 return project
-            if not project.session_id and fallback is None:
-                fallback = project
-        return fallback
+        return None
 
     def _project_key(self, project: ProjectBinding) -> str:
-        return project.session_id or project.repo_path or project.repo_url or project.label()
+        return project.group_id or project.repo_path or project.repo_url or project.label()
 
     def _lock_for_project(self, project: ProjectBinding) -> asyncio.Lock:
         key = self._project_key(project)
@@ -510,10 +549,9 @@ class ProjectHelperPlugin(Star):
     def _should_watch(self, event: AstrMessageEvent, project: ProjectBinding | None) -> bool:
         if project is None:
             return False
-        if event.get_message_type() not in {
-            MessageType.GROUP_MESSAGE,
-            MessageType.FRIEND_MESSAGE,
-        }:
+        if not project.repo_url:
+            return False
+        if event.get_message_type() != MessageType.GROUP_MESSAGE:
             return False
         if event.get_sender_id() == event.get_self_id():
             return False
@@ -583,8 +621,7 @@ class ProjectHelperPlugin(Star):
         return (self.data_dir / "qa" / configured).resolve()
 
     def _default_repo_path(self, project: ProjectBinding) -> str:
-        source = project.repo_url.removesuffix(".git").rstrip("/") or project.project_name or project.session_id
-        name = source.rsplit("/", 1)[-1] or "target_repo"
+        name = _repo_name_from_url(project.repo_url) or project.group_id or "target_repo"
         sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
         return sanitized or "target_repo"
 
@@ -612,8 +649,9 @@ class ProjectHelperPlugin(Star):
         if shutil.which("git") is None:
             raise RuntimeError("系统找不到 git，无法克隆仓库。")
         cmd = ["git", "clone", "--depth", "1"]
-        if project.repo_branch:
-            cmd.extend(["--branch", project.repo_branch])
+        branch = project.repo_branch or self._detect_preferred_branch(project.repo_url)
+        if branch:
+            cmd.extend(["--branch", branch])
         cmd.extend([project.repo_url, str(repo_root)])
         self._run_cmd(cmd, cwd=self.repo_base_dir)
 
@@ -624,6 +662,56 @@ class ProjectHelperPlugin(Star):
         if project.repo_branch:
             self._run_cmd(["git", "checkout", project.repo_branch], cwd=repo_root)
         self._run_cmd(["git", "pull", "--ff-only"], cwd=repo_root)
+
+    def _detect_preferred_branch(self, repo_url: str) -> str:
+        if shutil.which("git") is None:
+            raise RuntimeError("系统找不到 git，无法检查仓库分支。")
+        for branch in ("main", "master"):
+            if self._remote_branch_exists(repo_url, branch):
+                return branch
+        return ""
+
+    def _remote_branch_exists(self, repo_url: str, branch: str) -> bool:
+        env = os.environ.copy()
+        env.setdefault("GIT_TERMINAL_PROMPT", "0")
+        proc = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "--heads", repo_url, branch],
+            cwd=str(self.repo_base_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode == 0:
+            return True
+        if proc.returncode == 2:
+            return False
+        stderr = proc.stderr.strip() or proc.stdout.strip()
+        raise RuntimeError(stderr[:1000] or f"无法检查远端分支 {branch}")
+
+    async def _notify_admins(self, event: AstrMessageEvent, text: str) -> None:
+        if not self.config.error_notify_admins:
+            return
+        if not self.config.admin_qqs:
+            logger.warning("Project Helper failed but admin_qqs is empty: %s", text)
+            return
+
+        platform_id = event.get_platform_id()
+        if not platform_id:
+            logger.warning("Project Helper cannot notify admins without platform id: %s", text)
+            return
+
+        message = MessageChain([Plain(text)])
+        for admin_qq in self.config.admin_qqs:
+            session = f"{platform_id}:{MessageType.FRIEND_MESSAGE.value}:{admin_qq}"
+            try:
+                sent = await self.context.send_message(session, message)
+                if not sent:
+                    logger.warning("Project Helper admin notification was not sent to %s", session)
+            except Exception as exc:
+                logger.warning("Project Helper admin notification failed for %s: %s", session, exc)
 
     def _remember_answer(
         self,

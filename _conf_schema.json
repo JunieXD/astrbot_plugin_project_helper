@@ -1,30 +1,24 @@
 {
   "projects": {
-    "description": "项目接入列表：一条配置表示一个会话/群绑定一个 GitHub 项目。",
+    "description": "项目接入列表：一条配置表示一个 QQ 群绑定一个 GitHub 项目。",
     "type": "template_list",
     "default": [],
-    "hint": "session_id 形如 aiocqhttp:GroupMessage:123456789；可在群内用 /ph status 查看当前会话 ID。",
+    "hint": "每条绑定至少填写 QQ群号 和 Git 仓库地址。插件只会在对应群聊里监听并回答该项目问题。",
     "templates": {
       "project": {
-        "name": "群项目绑定",
-        "display_item": "project_name",
+        "name": "QQ群项目绑定",
+        "display_item": "repo_url",
         "items": {
           "enabled": {
             "description": "启用此项目绑定",
             "type": "bool",
             "default": true
           },
-          "session_id": {
-            "description": "目标会话 ID",
+          "group_id": {
+            "description": "QQ群号",
             "type": "string",
             "default": "",
-            "hint": "当前群/会话的 unified_msg_origin，例如 aiocqhttp:GroupMessage:123456789。留空可作为兼容用的全局兜底项目。"
-          },
-          "project_name": {
-            "description": "项目显示名",
-            "type": "string",
-            "default": "",
-            "hint": "用于状态展示和 QA 文档标题。"
+            "hint": "只填群号，例如 123456789。"
           },
           "project_prompt": {
             "description": "项目简介提示词",
@@ -33,32 +27,39 @@
             "hint": "简单介绍这个项目是做什么的、常见使用场景、哪些问题算本项目问题、哪些问题通常不属于本项目。会注入给 Agent 帮助判断是否需要回复。"
           },
           "repo_url": {
-            "description": "Git 仓库地址",
+            "description": "Git 仓库地址（必填）",
             "type": "string",
-            "hint": "https://github.com/owner/repo.git",
-            "default": ""
+            "default": "",
+            "hint": "填写 GitHub/Git 仓库地址，例如 https://github.com/owner/repo.git。未填写时这条绑定不会生效。",
+            "obvious_hint": true
           },
           "repo_branch": {
             "description": "可选分支、tag 或 commit",
             "type": "string",
-            "hint": "main",
-            "default": ""
+            "default": "",
+            "hint": "留空时自动优先使用 main，其次 master；如果两者都不存在，则使用远端默认分支。"
           },
           "repo_path": {
             "description": "本地仓库 checkout 路径",
             "type": "string",
-            "hint": "留空时按仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/repos。",
-            "default": ""
+            "default": "",
+            "hint": "留空时按 GitHub 仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/repos。"
           },
           "qa_path": {
             "description": "项目 QA Markdown 路径",
             "type": "string",
-            "hint": "留空时按仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/qa。",
-            "default": ""
+            "default": "",
+            "hint": "留空时按 GitHub 仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/qa。"
           }
         }
       }
     }
+  },
+  "admin_qqs": {
+    "description": "错误通知管理员 QQ 号列表",
+    "type": "list",
+    "default": [],
+    "hint": "当 Agent 或仓库处理失败时，插件会私聊这些 QQ 号；不会把错误发到群里。"
   },
   "buffer_seconds": {
     "description": "等待连续消息结束的秒数",
@@ -77,11 +78,6 @@
     "type": "int",
     "default": 1800
   },
-  "agent_model": {
-    "description": "预留字段。当前使用 AstrBot 对该会话选择的 provider/model。",
-    "type": "string",
-    "default": ""
-  },
   "agent_timeout_seconds": {
     "description": "单次 Agent 总超时秒数",
     "type": "float",
@@ -96,7 +92,7 @@
     "description": "单次 Agent 最多工具调用轮数",
     "type": "int",
     "default": 25,
-    "hint": "用于防止 Agent 无限循环；复杂项目可适当调大。"
+    "hint": "用于防止 Agent 无限循环；复杂项目可适当调大。运行时会限制在 1..80。"
   },
   "conversation_ttl_seconds": {
     "description": "缓冲消息最长保留秒数",
@@ -109,23 +105,26 @@
     "default": false
   },
   "send_typing": {
-    "description": "Agent 工作时发送正在输入提示",
+    "description": "显示机器人正在输入状态",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "开启后，Agent 调查期间会显示平台的“正在输入”状态；不会额外向群里发送文字消息。"
   },
   "auto_update_repo": {
     "description": "每次回答前自动 git fetch/pull",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "include_sources": {
     "description": "要求 Agent 在必要时附上简短文件依据",
     "type": "bool",
-    "default": true
+    "default": false,
+    "hint": "默认关闭，群友一般只需要产品侧结论；开启后可能会在回答末尾附少量文件路径。"
   },
-  "debug_reply_on_error": {
-    "description": "处理失败时在群内发送简短错误提示",
+  "error_notify_admins": {
+    "description": "处理失败时私聊管理员",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "需要同时配置 admin_qqs。关闭后失败只会写入 AstrBot 日志。"
   }
 }
