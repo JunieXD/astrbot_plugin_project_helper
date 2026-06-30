@@ -1,6 +1,11 @@
 name: astrbot_plugin_project_helper
-desc: Group-chat project Q&A helper that lets an AstrBot agent inspect a GitHub repository before replying.
-help: Configure a target repository, then let the plugin monitor group messages and answer project questions.
-version: v0.1.0
-author: Junie
+desc: 群聊项目答疑助手，聚合连续消息后让 AstrBot Agent 只读检索 GitHub 仓库代码和 Markdown，再决定是否回复。
+help: 配置目标仓库后，插件会监听群聊消息并回答与项目有关的问题；输入 /project_helper_status 查看状态。
+version: v0.1.1
+author: JunieXD
 repo: https://github.com/JunieXD/astrbot_plugin_project_helper
+display_name: 项目答疑助手
+short_desc: 让 Agent 读取项目仓库后回答群友问题。
+support_platforms:
+  - aiocqhttp
+astrbot_version: ">=4.16,<5"
