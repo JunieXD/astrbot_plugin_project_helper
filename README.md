@@ -2,18 +2,21 @@
 
 让 AstrBot 在项目交流群里做“会读代码的答疑群友”。
 
-插件会监听群内连续消息，先交给 Agent 判断是否和目标 GitHub 项目有关；如果只是闲聊，它返回 `reply=false`，机器人不发言；如果是项目问题，Agent 会用只读仓库工具检索代码和 Markdown，然后把答案发回群里。
+插件会监听群内连续消息，先交给 Agent 判断是否和目标 GitHub 项目有关；如果只是闲聊、问题已经被其他群友解答，或提问者表示已解决，它返回 `reply=false`，机器人不发言；如果是项目问题，Agent 会先查项目 QA Markdown，再按需用只读仓库工具检索代码和 Markdown，然后把答案发回群里。
 
 ## 为什么先用 AstrBot 内置 Agent
 
-当前版本优先使用 AstrBot 自带的 `Context.tool_loop_agent()`，并给它注入 4 个只读仓库工具：
+当前版本优先使用 AstrBot 自带的 `Context.tool_loop_agent()`，并给它注入只读仓库工具和一个受控 QA Markdown 记忆工具：
 
 - `repo_tree`: 查看目录结构
 - `repo_search`: 搜索代码/文档
 - `repo_read_file`: 按行读取文件
 - `repo_find_files`: 按 glob 找文件
+- `qa_read`: 读取项目常见 QA
+- `qa_search`: 搜索项目常见 QA
+- `qa_upsert`: 追加一条调查后的 QA 记录
 
-这已经满足“能自主读取项目代码以及 Markdown 文件并回答”的核心要求，而且不用额外接入外部 Agent 服务。
+这已经满足“能自主读取项目代码以及 Markdown 文件并回答”的核心要求，而且不用额外接入外部 Agent 服务。QA 工具只允许读写当前项目绑定的单个 Markdown 文件，不暴露任意写文件能力。
 
 PI Agent 是更完整的本地 coding agent，但默认权限边界更宽，接入 AstrBot 还需要额外进程管理、会话协议和权限隔离。等内置 Agent 的效果确实不够时，再把 PI Agent 做成可选 runner 更合适。
 
@@ -43,26 +46,30 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 
 ## 配置
 
-核心配置在 WebUI 里填：
+核心配置在 WebUI 里填。`projects` 是项目绑定列表，一条配置表示一个群/会话绑定一个项目：
 
+- `session_id`: 群/会话 ID，例如 `aiocqhttp:GroupMessage:123456789`
+- `project_name`: 项目显示名
 - `repo_url`: 目标项目 Git 地址，例如 `https://github.com/owner/repo.git`
 - `repo_branch`: 可选分支/tag/commit
 - `repo_path`: 本地 checkout 路径。相对路径会放到 `data/plugin_data/astrbot_plugin_project_helper/repos/`
-- `enabled_sessions`: 限定处理哪些群。空列表表示所有会话
-- `buffer_seconds`: 多条消息聚合等待时间
+- `qa_path`: 项目 QA Markdown 路径。相对路径会放到 `data/plugin_data/astrbot_plugin_project_helper/qa/`
+- `buffer_seconds`: 多条消息聚合等待时间，默认 15 秒
+- `max_buffer_messages`: 一次聚合最多保留的消息数，默认 20 条
+- `max_tool_calls`: 单次 Agent 最多工具调用轮数，默认 25
 - `auto_update_repo`: 每次回答前是否自动 `git fetch/pull`
 
-常用命令：
+管理员命令：
 
 ```text
-/project_helper_status
-/project_helper_update
+/ph status
+/ph update
 ```
 
-`/project_helper_update` 需要管理员权限。
+两个命令都需要管理员权限。`/ph status` 可用于查看当前会话 ID，方便复制到 `projects[].session_id`。
 
 ## 当前限制
 
 - 图片和日志文件目前会作为“附件/媒体提示”进入上下文，还没有自动 OCR 或完整文件内容抽取。
 - Agent 最终必须输出 JSON；如果模型不遵守，插件会把原始文本当作回答兜底发送。
-- 仓库工具是只读的，不暴露 shell/write/edit，避免群消息触发任意本地操作。
+- 仓库工具是只读的，不暴露 shell/write/edit；QA 工具只允许写当前项目的 QA Markdown。

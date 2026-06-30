@@ -4,6 +4,7 @@ import asyncio
 import fnmatch
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -86,6 +87,210 @@ class RepoToolLimits:
     max_read_bytes: int = 48_000
     max_tree_depth: int = 4
     max_output_chars: int = 20_000
+
+
+@dataclass(frozen=True)
+class QAMemoryLimits:
+    max_read_bytes: int = 64_000
+    max_search_matches: int = 20
+    max_entry_chars: int = 12_000
+    max_output_chars: int = 20_000
+
+
+class QAMemoryTools:
+    def __init__(
+        self,
+        qa_path: Path,
+        *,
+        project_label: str,
+        limits: QAMemoryLimits | None = None,
+    ) -> None:
+        self.qa_path = qa_path.resolve()
+        self.project_label = project_label
+        self.limits = limits or QAMemoryLimits()
+
+    def tool_set(self) -> list[FunctionTool]:
+        return [
+            FunctionTool(
+                name="qa_read",
+                description=(
+                    "Read the project QA Markdown memory. Use this before searching code "
+                    "to see whether the question has already been investigated."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                },
+                handler=self.qa_read,
+            ),
+            FunctionTool(
+                name="qa_search",
+                description=(
+                    "Search the QA Markdown memory for existing answers. "
+                    "Use concise keywords from the user's question or error message."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Keyword or phrase to search in QA memory.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+                handler=self.qa_search,
+            ),
+            FunctionTool(
+                name="qa_upsert",
+                description=(
+                    "Append a corrected or reusable QA entry to the project QA Markdown memory. "
+                    "Use this after investigating an answer that is likely to help future users, "
+                    "or after correcting a previous wrong answer. Keep entries concise."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Short natural-language question or issue title.",
+                        },
+                        "answer": {
+                            "type": "string",
+                            "description": "Reusable answer for ordinary project users.",
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "Optional short evidence, such as docs/code paths and line numbers.",
+                        },
+                        "tags": {
+                            "type": "string",
+                            "description": "Optional comma-separated keywords.",
+                        },
+                    },
+                    "required": ["question", "answer"],
+                },
+                handler=self.qa_upsert,
+            ),
+        ]
+
+    async def qa_read(self, **_: object) -> str:
+        if not self.qa_path.exists():
+            return self._clip(self._initial_content())
+        data = await asyncio.to_thread(self._read_text)
+        return self._clip(data)
+
+    async def qa_search(self, query: str, **_: object) -> str:
+        query = str(query or "").strip()
+        if not query:
+            return "Search query is empty."
+        if not self.qa_path.exists():
+            return "QA memory file does not exist yet."
+
+        lowered_terms = [term for term in query.lower().split() if term]
+        if not lowered_terms:
+            lowered_terms = [query.lower()]
+
+        text = await asyncio.to_thread(self._read_text)
+        lines = text.splitlines()
+        matches: list[str] = []
+        for idx, line in enumerate(lines, start=1):
+            lowered = line.lower()
+            if any(term in lowered for term in lowered_terms):
+                start = max(1, idx - 2)
+                end = min(len(lines), idx + 4)
+                snippet = "\n".join(
+                    f"{line_no}: {lines[line_no - 1]}"
+                    for line_no in range(start, end + 1)
+                )
+                matches.append(snippet)
+                if len(matches) >= self.limits.max_search_matches:
+                    break
+        if not matches:
+            return "No QA memory matches."
+        if len(matches) >= self.limits.max_search_matches:
+            matches.append(f"... truncated after {self.limits.max_search_matches} matches")
+        return self._clip("\n\n---\n\n".join(matches))
+
+    async def qa_upsert(
+        self,
+        question: str,
+        answer: str,
+        evidence: str = "",
+        tags: str = "",
+        **_: object,
+    ) -> str:
+        question = str(question or "").strip()
+        answer = str(answer or "").strip()
+        evidence = str(evidence or "").strip()
+        tags = str(tags or "").strip()
+        if not question:
+            return "question is required."
+        if not answer:
+            return "answer is required."
+
+        entry = self._format_entry(question, answer, evidence, tags)
+        if len(entry) > self.limits.max_entry_chars:
+            return f"QA entry is too long; keep it under {self.limits.max_entry_chars} characters."
+
+        await asyncio.to_thread(self._append_entry, entry)
+        return f"QA memory updated: {self.qa_path.name}"
+
+    def _initial_content(self) -> str:
+        return (
+            f"# {self.project_label} 常见 QA\n\n"
+            "这个文件由 AstrBot 项目答疑助手维护，用来沉淀已经调查过的问题。\n\n"
+            "## 条目\n"
+        )
+
+    def _format_entry(self, question: str, answer: str, evidence: str, tags: str) -> str:
+        date_text = time.strftime("%Y-%m-%d")
+        parts = [
+            "",
+            f"### {question}",
+            "",
+            f"- 更新时间：{date_text}",
+        ]
+        if tags:
+            parts.append(f"- 标签：{tags}")
+        parts.extend(
+            [
+                "",
+                "#### 答案",
+                "",
+                answer,
+            ]
+        )
+        if evidence:
+            parts.extend(
+                [
+                    "",
+                    "#### 依据",
+                    "",
+                    evidence,
+                ]
+            )
+        parts.append("")
+        return "\n".join(parts)
+
+    def _read_text(self) -> str:
+        with self.qa_path.open("r", encoding="utf-8", errors="replace") as handle:
+            data = handle.read(self.limits.max_read_bytes + 1)
+        if len(data.encode("utf-8", errors="replace")) > self.limits.max_read_bytes:
+            return data[: self.limits.max_read_bytes] + "\n... truncated; search for narrower keywords"
+        return data
+
+    def _append_entry(self, entry: str) -> None:
+        self.qa_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.qa_path.exists():
+            self.qa_path.write_text(self._initial_content(), encoding="utf-8")
+        with self.qa_path.open("a", encoding="utf-8") as handle:
+            handle.write(entry)
+
+    def _clip(self, text: str) -> str:
+        if len(text) <= self.limits.max_output_chars:
+            return text
+        return text[: self.limits.max_output_chars] + f"\n... truncated at {self.limits.max_output_chars} characters"
 
 
 class RepositoryTools:

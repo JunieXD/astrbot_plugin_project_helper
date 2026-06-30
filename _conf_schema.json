@@ -1,92 +1,124 @@
 {
-  "repo_url": {
-    "description": "Target Git repository URL. Leave empty when repo_path already points to a local checkout.",
-    "type": "string",
-    "hint": "https://github.com/owner/repo.git",
-    "default": ""
-  },
-  "repo_branch": {
-    "description": "Optional branch, tag, or commit to checkout after cloning/updating.",
-    "type": "string",
-    "hint": "main",
-    "default": ""
-  },
-  "repo_path": {
-    "description": "Local repository checkout path. Relative paths are resolved under AstrBot data/plugin_data/astrbot_plugin_project_helper/repos.",
-    "type": "string",
-    "hint": "target_repo",
-    "default": "target_repo"
-  },
-  "enabled_sessions": {
-    "description": "Only handle these unified session IDs. Empty means all sessions.",
-    "type": "list",
-    "items": {
-      "type": "string"
-    },
-    "default": []
+  "projects": {
+    "description": "项目接入列表：一条配置表示一个会话/群绑定一个 GitHub 项目。",
+    "type": "template_list",
+    "default": [],
+    "hint": "session_id 形如 aiocqhttp:GroupMessage:123456789；可在群内用 /ph status 查看当前会话 ID。",
+    "templates": {
+      "project": {
+        "name": "群项目绑定",
+        "display_item": "project_name",
+        "items": {
+          "enabled": {
+            "description": "启用此项目绑定",
+            "type": "bool",
+            "default": true
+          },
+          "session_id": {
+            "description": "目标会话 ID",
+            "type": "string",
+            "default": "",
+            "hint": "当前群/会话的 unified_msg_origin，例如 aiocqhttp:GroupMessage:123456789。留空可作为兼容用的全局兜底项目。"
+          },
+          "project_name": {
+            "description": "项目显示名",
+            "type": "string",
+            "default": "",
+            "hint": "用于状态展示和 QA 文档标题。"
+          },
+          "repo_url": {
+            "description": "Git 仓库地址",
+            "type": "string",
+            "hint": "https://github.com/owner/repo.git",
+            "default": ""
+          },
+          "repo_branch": {
+            "description": "可选分支、tag 或 commit",
+            "type": "string",
+            "hint": "main",
+            "default": ""
+          },
+          "repo_path": {
+            "description": "本地仓库 checkout 路径",
+            "type": "string",
+            "hint": "留空时按仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/repos。",
+            "default": ""
+          },
+          "qa_path": {
+            "description": "项目 QA Markdown 路径",
+            "type": "string",
+            "hint": "留空时按仓库名自动生成；相对路径会放到 data/plugin_data/astrbot_plugin_project_helper/qa。",
+            "default": ""
+          }
+        }
+      }
+    }
   },
   "buffer_seconds": {
-    "description": "Seconds to wait for consecutive user messages before asking the agent.",
+    "description": "等待连续消息结束的秒数",
     "type": "float",
-    "default": 8.0
+    "default": 15.0,
+    "hint": "每来一条新消息会重新计时；适当调大可以避免把同一个问题切碎。"
   },
   "max_buffer_messages": {
-    "description": "Maximum number of messages kept for one pending question.",
+    "description": "一次聚合最多保留的消息条数",
     "type": "int",
-    "default": 8
+    "default": 20,
+    "hint": "超过后会丢弃最早消息并在 Agent 提示里说明发生了截断。"
   },
   "max_answer_chars": {
-    "description": "Maximum characters sent to the group in one answer.",
+    "description": "单次群回复最大字符数",
     "type": "int",
     "default": 1800
   },
   "agent_model": {
-    "description": "Reserved for future use. The plugin currently uses AstrBot's selected provider/model for the session.",
+    "description": "预留字段。当前使用 AstrBot 对该会话选择的 provider/model。",
     "type": "string",
     "default": ""
   },
   "agent_timeout_seconds": {
-    "description": "Maximum seconds to wait for one agent run.",
+    "description": "单次 Agent 总超时秒数",
     "type": "float",
-    "default": 180.0
+    "default": 300.0
   },
   "tool_timeout_seconds": {
-    "description": "Maximum seconds for each repository tool call.",
+    "description": "单个工具调用超时秒数",
     "type": "int",
     "default": 30
   },
   "max_tool_calls": {
-    "description": "Maximum repository tool calls per agent run.",
+    "description": "单次 Agent 最多工具调用轮数",
     "type": "int",
-    "default": 10
+    "default": 25,
+    "hint": "用于防止 Agent 无限循环；复杂项目可适当调大。"
   },
   "conversation_ttl_seconds": {
-    "description": "Keep recent message context for this many seconds.",
+    "description": "缓冲消息最长保留秒数",
     "type": "float",
     "default": 300.0
   },
   "respond_when_mentioned_only": {
-    "description": "If true, only process messages that wake or mention the bot.",
+    "description": "仅在唤醒或 @ 机器人时处理消息",
     "type": "bool",
     "default": false
   },
   "send_typing": {
-    "description": "Send typing indicator while the agent is working when the platform supports it.",
+    "description": "Agent 工作时发送正在输入提示",
     "type": "bool",
     "default": true
   },
   "auto_update_repo": {
-    "description": "Run git fetch/pull before answering. Disable this for very large repositories or offline deployments.",
+    "description": "每次回答前自动 git fetch/pull",
     "type": "bool",
     "default": false
   },
   "include_sources": {
-    "description": "Ask the agent to include concise file references in answers.",
+    "description": "要求 Agent 在必要时附上简短文件依据",
     "type": "bool",
     "default": true
   },
   "debug_reply_on_error": {
-    "description": "Reply with a short error message when the agent fails. If false, failures are only logged.",
+    "description": "处理失败时在群内发送简短错误提示",
     "type": "bool",
     "default": true
   }

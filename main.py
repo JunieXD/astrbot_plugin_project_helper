@@ -24,17 +24,50 @@ try:
 except Exception:  # pragma: no cover - compatibility with older AstrBot versions
     get_astrbot_data_path = None
 
-from .repo_tools import RepositoryTools
+from .repo_tools import QAMemoryTools, RepositoryTools
 
 
 PLUGIN_NAME = "astrbot_plugin_project_helper"
 ANSWER_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+RECENT_ANSWER_TTL_SECONDS = 3600.0
+
+
+@dataclass(frozen=True)
+class ProjectBinding:
+    session_id: str
+    repo_url: str = ""
+    repo_branch: str = ""
+    repo_path: str = ""
+    qa_path: str = ""
+    project_name: str = ""
+    enabled: bool = True
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any] | None) -> "ProjectBinding":
+        data = data or {}
+        return cls(
+            session_id=str(data.get("session_id") or data.get("target_umo") or "").strip(),
+            project_name=str(data.get("project_name") or data.get("name") or "").strip(),
+            repo_url=str(data.get("repo_url") or "").strip(),
+            repo_branch=str(data.get("repo_branch") or "").strip(),
+            repo_path=str(data.get("repo_path") or "").strip(),
+            qa_path=str(data.get("qa_path") or "").strip(),
+            enabled=_as_bool(data.get("enabled"), True),
+        )
+
+    def label(self) -> str:
+        if self.project_name:
+            return self.project_name
+        if self.repo_url:
+            return self.repo_url.removesuffix(".git").rstrip("/").rsplit("/", 1)[-1] or self.repo_url
+        return self.repo_path or "(未命名项目)"
 
 
 @dataclass
 class BufferedMessage:
     sender_id: str
     sender_name: str
+    is_admin: bool
     text: str
     outline: str
     attachments: list[str]
@@ -46,21 +79,27 @@ class SessionBuffer:
     messages: list[BufferedMessage] = field(default_factory=list)
     task: asyncio.Task | None = None
     updated_at: float = 0.0
+    truncated_count: int = 0
+
+
+@dataclass
+class RecentAnswer:
+    project_key: str
+    answer: str
+    question_context: str
+    created_at: float
 
 
 @dataclass(frozen=True)
 class ProjectHelperConfig:
-    repo_url: str = ""
-    repo_branch: str = ""
-    repo_path: str = "target_repo"
-    enabled_sessions: tuple[str, ...] = ()
-    buffer_seconds: float = 8.0
-    max_buffer_messages: int = 8
+    projects: tuple[ProjectBinding, ...] = ()
+    buffer_seconds: float = 15.0
+    max_buffer_messages: int = 20
     max_answer_chars: int = 1800
     agent_model: str = ""
-    agent_timeout_seconds: float = 180.0
+    agent_timeout_seconds: float = 300.0
     tool_timeout_seconds: int = 30
-    max_tool_calls: int = 10
+    max_tool_calls: int = 25
     conversation_ttl_seconds: float = 300.0
     respond_when_mentioned_only: bool = False
     send_typing: bool = True
@@ -71,25 +110,61 @@ class ProjectHelperConfig:
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> "ProjectHelperConfig":
         data = data or {}
+        projects = cls._parse_projects(data)
         return cls(
-            repo_url=str(data.get("repo_url") or "").strip(),
-            repo_branch=str(data.get("repo_branch") or "").strip(),
-            repo_path=str(data.get("repo_path") or "target_repo").strip() or "target_repo",
-            enabled_sessions=tuple(str(item) for item in data.get("enabled_sessions") or [] if str(item).strip()),
-            buffer_seconds=_as_float(data.get("buffer_seconds"), 8.0, 0.5, 120.0),
-            max_buffer_messages=_as_int(data.get("max_buffer_messages"), 8, 1, 50),
+            projects=projects,
+            buffer_seconds=_as_float(data.get("buffer_seconds"), 15.0, 1.0, 180.0),
+            max_buffer_messages=_as_int(data.get("max_buffer_messages"), 20, 1, 100),
             max_answer_chars=_as_int(data.get("max_answer_chars"), 1800, 200, 8000),
             agent_model=str(data.get("agent_model") or "").strip(),
-            agent_timeout_seconds=_as_float(data.get("agent_timeout_seconds"), 180.0, 20.0, 900.0),
+            agent_timeout_seconds=_as_float(data.get("agent_timeout_seconds"), 300.0, 20.0, 1200.0),
             tool_timeout_seconds=_as_int(data.get("tool_timeout_seconds"), 30, 5, 300),
-            max_tool_calls=_as_int(data.get("max_tool_calls"), 10, 1, 40),
+            max_tool_calls=_as_int(data.get("max_tool_calls"), 25, 1, 80),
             conversation_ttl_seconds=_as_float(data.get("conversation_ttl_seconds"), 300.0, 30.0, 3600.0),
-            respond_when_mentioned_only=bool(data.get("respond_when_mentioned_only", False)),
-            send_typing=bool(data.get("send_typing", True)),
-            auto_update_repo=bool(data.get("auto_update_repo", False)),
-            include_sources=bool(data.get("include_sources", True)),
-            debug_reply_on_error=bool(data.get("debug_reply_on_error", True)),
+            respond_when_mentioned_only=_as_bool(data.get("respond_when_mentioned_only"), False),
+            send_typing=_as_bool(data.get("send_typing"), True),
+            auto_update_repo=_as_bool(data.get("auto_update_repo"), False),
+            include_sources=_as_bool(data.get("include_sources"), True),
+            debug_reply_on_error=_as_bool(data.get("debug_reply_on_error"), True),
         )
+
+    @staticmethod
+    def _parse_projects(data: dict[str, Any]) -> tuple[ProjectBinding, ...]:
+        raw_projects = data.get("projects")
+        projects: list[ProjectBinding] = []
+        if isinstance(raw_projects, list):
+            for item in raw_projects:
+                if not isinstance(item, dict):
+                    continue
+                project = ProjectBinding.from_mapping(item)
+                if project.repo_url or project.repo_path:
+                    projects.append(project)
+
+        if projects:
+            return tuple(projects)
+
+        legacy_repo_url = str(data.get("repo_url") or "").strip()
+        legacy_repo_path = str(data.get("repo_path") or "target_repo").strip() or "target_repo"
+        if legacy_repo_url or legacy_repo_path:
+            sessions = [
+                str(item).strip()
+                for item in data.get("enabled_sessions") or []
+                if str(item).strip()
+            ]
+            if not sessions:
+                sessions = [""]
+            return tuple(
+                ProjectBinding(
+                    session_id=session,
+                    repo_url=legacy_repo_url,
+                    repo_branch=str(data.get("repo_branch") or "").strip(),
+                    repo_path=legacy_repo_path,
+                    project_name="Legacy Project",
+                    enabled=True,
+                )
+                for session in sessions
+            )
+        return ()
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -108,6 +183,20 @@ def _as_float(value: Any, default: float, minimum: float, maximum: float) -> flo
     return max(minimum, min(maximum, parsed))
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
 def _plugin_data_dir() -> Path:
     if get_astrbot_data_path is not None:
         return Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
@@ -116,9 +205,9 @@ def _plugin_data_dir() -> Path:
 
 @register(
     "astrbot_plugin_project_helper",
-    "Junie",
+    "JunieXD",
     "Use an AstrBot agent to inspect a GitHub repository and answer project questions in group chat.",
-    "0.1.0",
+    "0.2.0",
 )
 class ProjectHelperPlugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
@@ -128,37 +217,64 @@ class ProjectHelperPlugin(Star):
         self.repo_base_dir = self.data_dir / "repos"
         self.repo_base_dir.mkdir(parents=True, exist_ok=True)
         self.buffers: dict[str, SessionBuffer] = {}
-        self._repo_lock = asyncio.Lock()
+        self.recent_answers: dict[str, RecentAnswer] = {}
+        self._repo_locks: dict[str, asyncio.Lock] = {}
 
-    @filter.command("project_helper_status")
+    @filter.command_group("ph")
+    def ph(self) -> None:
+        pass
+
+    @ph.command("status")
     async def status(self, event: AstrMessageEvent) -> None:
-        repo_root = self._repo_root()
+        if not self._is_admin(event):
+            event.set_result("只有管理员可以查看项目答疑助手状态。")
+            return
+        project = self._project_for_event(event)
+        if project is None:
+            event.set_result(
+                f"当前会话未绑定项目：{event.unified_msg_origin}\n"
+                "请在插件配置 projects 中添加一条 session_id 为当前会话 ID 的项目配置。"
+            )
+            return
+        repo_root = self._repo_root(project)
+        qa_path = self._qa_path(project)
         status = [
-            "Project Helper",
+            "Project Helper (/ph)",
+            f"session: {event.unified_msg_origin}",
+            f"project: {project.label()}",
             f"repo_path: {repo_root}",
             f"repo_exists: {repo_root.exists()}",
-            f"repo_url: {self.config.repo_url or '(local only)'}",
-            f"branch: {self.config.repo_branch or '(default)'}",
-            f"enabled_sessions: {', '.join(self.config.enabled_sessions) if self.config.enabled_sessions else '(all)'}",
+            f"repo_url: {project.repo_url or '(local only)'}",
+            f"branch: {project.repo_branch or '(default)'}",
+            f"qa_path: {qa_path}",
+            f"qa_exists: {qa_path.exists()}",
+            f"max_tool_calls: {self.config.max_tool_calls}",
+            f"buffer_seconds: {self.config.buffer_seconds:g}",
+            f"max_buffer_messages: {self.config.max_buffer_messages}",
         ]
         event.set_result("\n".join(status))
 
-    @filter.command("project_helper_update")
+    @ph.command("update")
     async def update_repo(self, event: AstrMessageEvent) -> None:
-        if not event.is_admin():
+        if not self._is_admin(event):
             event.set_result("只有管理员可以更新项目仓库。")
             return
+        project = self._project_for_event(event)
+        if project is None:
+            event.set_result(f"当前会话未绑定项目：{event.unified_msg_origin}")
+            return
         try:
-            repo_root = await self._ensure_repo(update=True)
+            repo_root = await self._ensure_repo(project, update=True)
         except Exception as exc:
             logger.error("Project Helper repository update failed: %s", exc, exc_info=True)
             event.set_result(f"仓库更新失败：{exc}")
             return
-        event.set_result(f"仓库已就绪：{repo_root}")
+        event.set_result(f"仓库已就绪：{project.label()}\n{repo_root}")
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=20)
     async def on_message(self, event: AstrMessageEvent) -> None:
-        if not self._should_watch(event):
+        project = self._project_for_event(event)
+        if not self._should_watch(event, project):
             return
         if event.get_message_str().lstrip().startswith("/"):
             return
@@ -177,6 +293,7 @@ class ProjectHelperPlugin(Star):
         buf.messages.append(message)
         buf.updated_at = time.time()
         if len(buf.messages) > self.config.max_buffer_messages:
+            buf.truncated_count += len(buf.messages) - self.config.max_buffer_messages
             buf.messages = buf.messages[-self.config.max_buffer_messages :]
 
         if buf.task and not buf.task.done():
@@ -198,6 +315,10 @@ class ProjectHelperPlugin(Star):
         buf = self.buffers.get(session_id)
         if not buf or not buf.messages:
             return
+        project = self._project_for_event(event)
+        if project is None:
+            self.buffers.pop(session_id, None)
+            return
 
         now = time.time()
         messages = [
@@ -205,6 +326,7 @@ class ProjectHelperPlugin(Star):
             for item in buf.messages
             if now - item.created_at <= self.config.conversation_ttl_seconds
         ]
+        truncated_count = buf.truncated_count
         self.buffers.pop(session_id, None)
         if not messages:
             return
@@ -212,8 +334,8 @@ class ProjectHelperPlugin(Star):
         if self.config.send_typing:
             await event.send_typing()
         try:
-            repo_root = await self._ensure_repo(update=self.config.auto_update_repo)
-            result = await self._ask_agent(event, repo_root, messages)
+            repo_root = await self._ensure_repo(project, update=self.config.auto_update_repo)
+            result = await self._ask_agent(event, project, repo_root, messages, truncated_count)
         finally:
             if self.config.send_typing:
                 await event.stop_typing()
@@ -227,20 +349,24 @@ class ProjectHelperPlugin(Star):
         if len(answer) > self.config.max_answer_chars:
             answer = answer[: self.config.max_answer_chars].rstrip() + "\n...后面略了，我先把关键结论放上面。"
         await event.send(MessageChain([Plain(answer)]))
+        self._remember_answer(event, project, messages, answer)
 
     async def _ask_agent(
         self,
         event: AstrMessageEvent,
+        project: ProjectBinding,
         repo_root: Path,
         messages: list[BufferedMessage],
+        truncated_count: int,
     ) -> dict[str, Any]:
         provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
         repo_tools = RepositoryTools(repo_root)
+        qa_tools = QAMemoryTools(self._qa_path(project), project_label=project.label())
         tool_set = ToolSet()
-        for tool in repo_tools.tool_set():
+        for tool in [*qa_tools.tool_set(), *repo_tools.tool_set()]:
             tool_set.add_tool(tool)
 
-        prompt = self._build_user_prompt(event, repo_root, messages)
+        prompt = self._build_user_prompt(event, project, repo_root, messages, truncated_count)
         system_prompt = self._build_system_prompt()
 
         kwargs: dict[str, Any] = {
@@ -267,40 +393,61 @@ class ProjectHelperPlugin(Star):
 
     def _build_system_prompt(self) -> str:
         sources_rule = (
-            "回答中尽量附上关键文件路径和行号，比如 `src/foo.py:123`。"
+            "如果做过代码或文档调查，回答末尾用很短的括号补充关键依据，比如 `src/foo.py:123`。"
             if self.config.include_sources
             else "回答中不必强制列出文件路径。"
         )
         return (
-            "你是一个 GitHub 项目交流群里的技术答疑成员。你的任务不是闲聊，而是判断群友最近几条消息是否在问目标项目。"
-            "你可以使用仓库只读工具查看目录、搜索代码、读取文件和 Markdown。"
-            "如果问题需要代码依据，必须先用工具调查；不要凭空猜。"
-            "如果最近消息只是闲聊、寒暄、表情、无关话题，返回不回复。"
-            "如果信息不足但明显与项目有关，可以基于已知代码说明你确认了什么、还缺什么。"
+            "你是一个 GitHub 项目交流群里的答疑成员，服务对象主要是普通项目使用者，不是代码贡献者。"
+            "回答时优先从产品行为、配置方法、使用步骤、报错含义和排查顺序解释；只有用户明显需要实现细节时才展开代码。"
+            "你的第一步是判断最近连续消息是否需要机器人回复：如果只是闲聊、寒暄、表情、无关话题，返回不回复。"
+            "如果群里后续消息已经把问题回答清楚，或者提问者表示已解决，也返回不回复。"
+            "如果管理员指出你之前的回答有误，必须重新检查 QA 记录和仓库；确认你错了就道歉并给出更正，随后更新 QA；"
+            "如果管理员说法不对，就礼貌纠正并给出简短证据。"
+            "你有一个项目 QA Markdown 记忆工具。开始调查代码前，优先读取/搜索 QA，看是否已有可靠答案；"
+            "若 QA 已足够，直接基于 QA 回答。若 QA 不足或可能过期，再使用仓库只读工具查看目录、搜索代码、读取文件和 Markdown。"
+            "回答完一个可复用的问题后，用 QA 工具把结论、适用条件和关键依据写回 Markdown；不要记录闲聊或不确定结论。"
+            "仓库工具只读；不要要求用户理解代码实现，除非这是解决问题必须的信息。"
             "语气自然、像群友，直接给结论，少说流程。"
             f"{sources_rule}"
             "最终只能输出一个 JSON 对象，不要输出 Markdown 代码块："
-            "{\"reply\": boolean, \"answer\": string, \"confidence\": \"low|medium|high\"}。"
+            "{\"reply\": boolean, \"answer\": string, \"confidence\": \"low|medium|high\", \"reason\": string}。"
             "当 reply=false 时 answer 必须为空字符串。"
         )
 
     def _build_user_prompt(
         self,
         event: AstrMessageEvent,
+        project: ProjectBinding,
         repo_root: Path,
         messages: list[BufferedMessage],
+        truncated_count: int,
     ) -> str:
         lines = [
+            f"目标项目：{project.label()}",
             f"目标仓库本地路径：{repo_root}",
+            f"QA Markdown 路径：{self._qa_path(project)}",
             f"平台会话：{event.unified_msg_origin}",
             "最近连续消息：",
         ]
+        if truncated_count:
+            lines.append(f"注意：由于消息数量超过上限，前面有 {truncated_count} 条较早消息未包含。")
         for idx, item in enumerate(messages, start=1):
             attachments = f" 附件/媒体: {', '.join(item.attachments)}" if item.attachments else ""
             text = item.text or item.outline or "(无文本)"
-            lines.append(f"{idx}. {item.sender_name or item.sender_id}: {text}{attachments}")
+            role = "管理员" if item.is_admin else "群友"
+            lines.append(f"{idx}. {item.sender_name or item.sender_id}({role}): {text}{attachments}")
+        recent_answer = self._recent_answer_for(event, project)
+        if recent_answer:
+            lines.extend(
+                [
+                    "最近一次机器人回答，供判断管理员纠错上下文：",
+                    recent_answer.answer,
+                ]
+            )
         lines.append(
-            "请判断这些消息合起来是否是在问目标项目。如果是，调查仓库并回答；如果不是，返回 reply=false。"
+            "请先判断是否需要回复。如果问题已被其他群友解答或已解决，返回 reply=false。"
+            "如果需要回复，优先查 QA Markdown；QA 不足时再调查仓库。"
         )
         return "\n".join(lines)
 
@@ -321,10 +468,36 @@ class ProjectHelperPlugin(Star):
             "reply": bool(data.get("reply", False)),
             "answer": str(data.get("answer") or "").strip(),
             "confidence": str(data.get("confidence") or "medium"),
+            "reason": str(data.get("reason") or "").strip(),
         }
 
-    def _should_watch(self, event: AstrMessageEvent) -> bool:
-        if self.config.enabled_sessions and event.unified_msg_origin not in self.config.enabled_sessions:
+    def _project_for_event(self, event: AstrMessageEvent) -> ProjectBinding | None:
+        return self._project_for_session(event.unified_msg_origin)
+
+    def _project_for_session(self, session_id: str) -> ProjectBinding | None:
+        fallback: ProjectBinding | None = None
+        for project in self.config.projects:
+            if not project.enabled:
+                continue
+            if project.session_id == session_id:
+                return project
+            if not project.session_id and fallback is None:
+                fallback = project
+        return fallback
+
+    def _project_key(self, project: ProjectBinding) -> str:
+        return project.session_id or project.repo_path or project.repo_url or project.label()
+
+    def _lock_for_project(self, project: ProjectBinding) -> asyncio.Lock:
+        key = self._project_key(project)
+        lock = self._repo_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._repo_locks[key] = lock
+        return lock
+
+    def _should_watch(self, event: AstrMessageEvent, project: ProjectBinding | None) -> bool:
+        if project is None:
             return False
         if event.get_message_type() not in {
             MessageType.GROUP_MESSAGE,
@@ -335,6 +508,12 @@ class ProjectHelperPlugin(Star):
             return False
         return True
 
+    def _is_admin(self, event: AstrMessageEvent) -> bool:
+        try:
+            return bool(event.is_admin())
+        except Exception:
+            return False
+
     async def _build_buffered_message(self, event: AstrMessageEvent) -> BufferedMessage:
         attachments = []
         for comp in event.get_messages():
@@ -344,6 +523,7 @@ class ProjectHelperPlugin(Star):
         return BufferedMessage(
             sender_id=event.get_sender_id(),
             sender_name=event.get_sender_name(),
+            is_admin=self._is_admin(event),
             text=event.get_message_str().strip(),
             outline=event.get_message_outline().strip(),
             attachments=attachments,
@@ -379,48 +559,92 @@ class ProjectHelperPlugin(Star):
                 return f"{label}({text})"
         return label
 
-    def _repo_root(self) -> Path:
-        configured = Path(self.config.repo_path).expanduser()
+    def _repo_root(self, project: ProjectBinding) -> Path:
+        configured = Path(project.repo_path or self._default_repo_path(project)).expanduser()
         if configured.is_absolute():
             return configured.resolve()
         return (self.repo_base_dir / configured).resolve()
 
-    async def _ensure_repo(self, *, update: bool) -> Path:
-        async with self._repo_lock:
-            repo_root = self._repo_root()
+    def _qa_path(self, project: ProjectBinding) -> Path:
+        configured = Path(project.qa_path or f"{self._default_repo_path(project)}_QA.md").expanduser()
+        if configured.is_absolute():
+            return configured.resolve()
+        return (self.data_dir / "qa" / configured).resolve()
+
+    def _default_repo_path(self, project: ProjectBinding) -> str:
+        source = project.repo_url.removesuffix(".git").rstrip("/") or project.project_name or project.session_id
+        name = source.rsplit("/", 1)[-1] or "target_repo"
+        sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
+        return sanitized or "target_repo"
+
+    async def _ensure_repo(self, project: ProjectBinding, *, update: bool) -> Path:
+        async with self._lock_for_project(project):
+            repo_root = self._repo_root(project)
             if repo_root.exists() and (repo_root / ".git").exists():
                 if update:
-                    await asyncio.to_thread(self._git_update, repo_root)
+                    await asyncio.to_thread(self._git_update, project, repo_root)
                 return repo_root
 
             if repo_root.exists() and not (repo_root / ".git").exists():
-                if self.config.repo_url:
+                if project.repo_url:
                     raise RuntimeError(f"repo_path exists but is not a git repository: {repo_root}")
                 return repo_root
 
-            if not self.config.repo_url:
+            if not project.repo_url:
                 raise RuntimeError("repo_url 未配置，且 repo_path 不存在。请先配置目标仓库或运行本地 checkout。")
 
             repo_root.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._git_clone, repo_root)
+            await asyncio.to_thread(self._git_clone, project, repo_root)
             return repo_root
 
-    def _git_clone(self, repo_root: Path) -> None:
+    def _git_clone(self, project: ProjectBinding, repo_root: Path) -> None:
         if shutil.which("git") is None:
             raise RuntimeError("系统找不到 git，无法克隆仓库。")
         cmd = ["git", "clone", "--depth", "1"]
-        if self.config.repo_branch:
-            cmd.extend(["--branch", self.config.repo_branch])
-        cmd.extend([self.config.repo_url, str(repo_root)])
+        if project.repo_branch:
+            cmd.extend(["--branch", project.repo_branch])
+        cmd.extend([project.repo_url, str(repo_root)])
         self._run_cmd(cmd, cwd=self.repo_base_dir)
 
-    def _git_update(self, repo_root: Path) -> None:
+    def _git_update(self, project: ProjectBinding, repo_root: Path) -> None:
         if shutil.which("git") is None:
             raise RuntimeError("系统找不到 git，无法更新仓库。")
         self._run_cmd(["git", "fetch", "--all", "--prune"], cwd=repo_root)
-        if self.config.repo_branch:
-            self._run_cmd(["git", "checkout", self.config.repo_branch], cwd=repo_root)
+        if project.repo_branch:
+            self._run_cmd(["git", "checkout", project.repo_branch], cwd=repo_root)
         self._run_cmd(["git", "pull", "--ff-only"], cwd=repo_root)
+
+    def _remember_answer(
+        self,
+        event: AstrMessageEvent,
+        project: ProjectBinding,
+        messages: list[BufferedMessage],
+        answer: str,
+    ) -> None:
+        self._prune_recent_answers()
+        self.recent_answers[event.unified_msg_origin] = RecentAnswer(
+            project_key=self._project_key(project),
+            answer=answer,
+            question_context="\n".join(item.text or item.outline for item in messages if item.text or item.outline),
+            created_at=time.time(),
+        )
+
+    def _recent_answer_for(self, event: AstrMessageEvent, project: ProjectBinding) -> RecentAnswer | None:
+        self._prune_recent_answers()
+        answer = self.recent_answers.get(event.unified_msg_origin)
+        if answer and answer.project_key == self._project_key(project):
+            return answer
+        return None
+
+    def _prune_recent_answers(self) -> None:
+        now = time.time()
+        expired = [
+            session_id
+            for session_id, answer in self.recent_answers.items()
+            if now - answer.created_at > RECENT_ANSWER_TTL_SECONDS
+        ]
+        for session_id in expired:
+            self.recent_answers.pop(session_id, None)
 
     def _run_cmd(self, cmd: list[str], cwd: Path) -> None:
         env = os.environ.copy()

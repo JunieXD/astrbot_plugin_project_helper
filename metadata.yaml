@@ -1,7 +1,7 @@
 name: astrbot_plugin_project_helper
 desc: 群聊项目答疑助手，聚合连续消息后让 AstrBot Agent 只读检索 GitHub 仓库代码和 Markdown，再决定是否回复。
-help: 配置目标仓库后，插件会监听群聊消息并回答与项目有关的问题；输入 /project_helper_status 查看状态。
-version: v0.1.1
+help: 在 projects 中配置群/项目绑定后，插件会监听群聊消息并回答与项目有关的问题；管理员输入 /ph status 查看状态。
+version: v0.2.0
 author: JunieXD
 repo: https://github.com/JunieXD/astrbot_plugin_project_helper
 display_name: 项目答疑助手
