@@ -1,0 +1,93 @@
+{
+  "repo_url": {
+    "description": "Target Git repository URL. Leave empty when repo_path already points to a local checkout.",
+    "type": "string",
+    "hint": "https://github.com/owner/repo.git",
+    "default": ""
+  },
+  "repo_branch": {
+    "description": "Optional branch, tag, or commit to checkout after cloning/updating.",
+    "type": "string",
+    "hint": "main",
+    "default": ""
+  },
+  "repo_path": {
+    "description": "Local repository checkout path. Relative paths are resolved under AstrBot data/plugin_data/astrbot_plugin_project_helper/repos.",
+    "type": "string",
+    "hint": "target_repo",
+    "default": "target_repo"
+  },
+  "enabled_sessions": {
+    "description": "Only handle these unified session IDs. Empty means all sessions.",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  },
+  "buffer_seconds": {
+    "description": "Seconds to wait for consecutive user messages before asking the agent.",
+    "type": "number",
+    "default": 8
+  },
+  "max_buffer_messages": {
+    "description": "Maximum number of messages kept for one pending question.",
+    "type": "number",
+    "default": 8
+  },
+  "max_answer_chars": {
+    "description": "Maximum characters sent to the group in one answer.",
+    "type": "number",
+    "default": 1800
+  },
+  "agent_model": {
+    "description": "Reserved for future use. The plugin currently uses AstrBot's selected provider/model for the session.",
+    "type": "string",
+    "default": ""
+  },
+  "agent_timeout_seconds": {
+    "description": "Maximum seconds to wait for one agent run.",
+    "type": "number",
+    "default": 180
+  },
+  "tool_timeout_seconds": {
+    "description": "Maximum seconds for each repository tool call.",
+    "type": "number",
+    "default": 30
+  },
+  "max_tool_calls": {
+    "description": "Maximum repository tool calls per agent run.",
+    "type": "number",
+    "default": 10
+  },
+  "conversation_ttl_seconds": {
+    "description": "Keep recent message context for this many seconds.",
+    "type": "number",
+    "default": 300
+  },
+  "respond_when_mentioned_only": {
+    "description": "If true, only process messages that wake or mention the bot.",
+    "type": "boolean",
+    "default": false
+  },
+  "send_typing": {
+    "description": "Send typing indicator while the agent is working when the platform supports it.",
+    "type": "boolean",
+    "default": true
+  },
+  "auto_update_repo": {
+    "description": "Run git fetch/pull before answering. Disable this for very large repositories or offline deployments.",
+    "type": "boolean",
+    "default": false
+  },
+  "include_sources": {
+    "description": "Ask the agent to include concise file references in answers.",
+    "type": "boolean",
+    "default": true
+  },
+  "debug_reply_on_error": {
+    "description": "Reply with a short error message when the agent fails. If false, failures are only logged.",
+    "type": "boolean",
+    "default": true
+  }
+}
