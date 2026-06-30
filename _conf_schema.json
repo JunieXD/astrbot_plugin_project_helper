@@ -27,17 +27,17 @@
   },
   "buffer_seconds": {
     "description": "Seconds to wait for consecutive user messages before asking the agent.",
-    "type": "number",
-    "default": 8
+    "type": "float",
+    "default": 8.0
   },
   "max_buffer_messages": {
     "description": "Maximum number of messages kept for one pending question.",
-    "type": "number",
+    "type": "int",
     "default": 8
   },
   "max_answer_chars": {
     "description": "Maximum characters sent to the group in one answer.",
-    "type": "number",
+    "type": "int",
     "default": 1800
   },
   "agent_model": {
@@ -47,47 +47,47 @@
   },
   "agent_timeout_seconds": {
     "description": "Maximum seconds to wait for one agent run.",
-    "type": "number",
-    "default": 180
+    "type": "float",
+    "default": 180.0
   },
   "tool_timeout_seconds": {
     "description": "Maximum seconds for each repository tool call.",
-    "type": "number",
+    "type": "int",
     "default": 30
   },
   "max_tool_calls": {
     "description": "Maximum repository tool calls per agent run.",
-    "type": "number",
+    "type": "int",
     "default": 10
   },
   "conversation_ttl_seconds": {
     "description": "Keep recent message context for this many seconds.",
-    "type": "number",
-    "default": 300
+    "type": "float",
+    "default": 300.0
   },
   "respond_when_mentioned_only": {
     "description": "If true, only process messages that wake or mention the bot.",
-    "type": "boolean",
+    "type": "bool",
     "default": false
   },
   "send_typing": {
     "description": "Send typing indicator while the agent is working when the platform supports it.",
-    "type": "boolean",
+    "type": "bool",
     "default": true
   },
   "auto_update_repo": {
     "description": "Run git fetch/pull before answering. Disable this for very large repositories or offline deployments.",
-    "type": "boolean",
+    "type": "bool",
     "default": false
   },
   "include_sources": {
     "description": "Ask the agent to include concise file references in answers.",
-    "type": "boolean",
+    "type": "bool",
     "default": true
   },
   "debug_reply_on_error": {
     "description": "Reply with a short error message when the agent fails. If false, failures are only logged.",
-    "type": "boolean",
+    "type": "bool",
     "default": true
   }
 }
