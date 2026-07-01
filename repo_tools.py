@@ -450,7 +450,10 @@ class RepositoryTools:
 
         walk(root, 0)
         if count >= self.limits.max_files:
-            lines.append(f"... truncated after {self.limits.max_files} entries")
+            lines.append(
+                f"... truncated after {self.limits.max_files} entries; "
+                "use repo_tree with a narrower path/depth or repo_find_files with a glob"
+            )
         return self._clip("\n".join(lines) if lines else "(empty)")
 
     async def repo_find_files(
@@ -474,7 +477,10 @@ class RepositoryTools:
                     break
 
         if len(matches) >= self.limits.max_files:
-            matches.append(f"... truncated after {self.limits.max_files} files")
+            matches.append(
+                f"... truncated after {self.limits.max_files} files; "
+                "use a narrower path or a more specific glob pattern"
+            )
         return self._clip("\n".join(matches) if matches else "No files matched.")
 
     async def repo_search(
@@ -535,6 +541,7 @@ class RepositoryTools:
         lines: list[str] = []
         total_bytes = 0
         truncated = False
+        last_line = start - 1
         with file_path.open("r", encoding="utf-8", errors="replace") as handle:
             for idx, line in enumerate(handle, start=1):
                 if idx < start:
@@ -547,8 +554,14 @@ class RepositoryTools:
                     truncated = True
                     break
                 lines.append(item)
+                last_line = idx
         if truncated:
-            lines.append(f"... truncated at {self.limits.max_read_bytes} bytes; use a narrower line range")
+            next_start = last_line + 1
+            lines.append(
+                f"... truncated at {self.limits.max_read_bytes} bytes; "
+                f"continue with repo_read_file(path='{self._rel(file_path)}', start_line={next_start}) "
+                "or use a narrower end_line"
+            )
         return "\n".join(lines) if lines else "(no lines in requested range)"
 
     async def _repo_search_rg(
@@ -604,7 +617,10 @@ class RepositoryTools:
             else:
                 lines.append(line)
         if len(text.splitlines()) >= self.limits.max_search_matches:
-            lines.append(f"... truncated after {self.limits.max_search_matches} matches")
+            lines.append(
+                f"... truncated after {self.limits.max_search_matches} matches; "
+                "refine query, set path to a narrower directory/file, or use repo_find_files first"
+            )
         return self._clip("\n".join(lines))
 
     def _repo_search_python(
@@ -630,7 +646,8 @@ class RepositoryTools:
                             results.append(f"{self._rel(file_path)}:{idx}: {line.strip()}")
                             if len(results) >= self.limits.max_search_matches:
                                 results.append(
-                                    f"... truncated after {self.limits.max_search_matches} matches"
+                                    f"... truncated after {self.limits.max_search_matches} matches; "
+                                    "refine query, set path to a narrower directory/file, or use repo_find_files first"
                                 )
                                 return self._clip("\n".join(results))
             except OSError:
@@ -721,5 +738,6 @@ class RepositoryTools:
             return text
         return (
             text[: self.limits.max_output_chars]
-            + f"\n... truncated at {self.limits.max_output_chars} characters"
+            + f"\n... truncated at {self.limits.max_output_chars} characters; "
+            "repeat the tool call with a narrower path/query or line range"
         )
