@@ -66,6 +66,8 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 
 项目显示名不需要单独配置，插件会直接使用 GitHub 仓库名。首次处理对应群的问题或执行 `/ph update` 时，插件会把仓库克隆到本地 `repo_path`；后续 Agent 通过只读工具检索这个本地 checkout 的代码和 Markdown。
 
+QA Markdown 会在第一次产生有效群回复时自动创建并记录一条问答。Agent 也可以在调查后主动用 `qa_upsert` 写入更完整的结论；如果它忘了写，插件会把已发送的群回复作为兜底记录保存下来。
+
 管理员命令：
 
 ```text

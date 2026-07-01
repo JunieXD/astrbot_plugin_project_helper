@@ -404,6 +404,7 @@ class ProjectHelperPlugin(Star):
             answer = answer[: self.config.max_answer_chars].rstrip() + "\n...后面略了，我先把关键结论放上面。"
         await event.send(MessageChain([Plain(answer)]))
         self._remember_answer(event, project, messages, answer)
+        await self._ensure_qa_record(project, messages, answer)
 
     async def _ask_agent(
         self,
@@ -730,6 +731,46 @@ class ProjectHelperPlugin(Star):
                     logger.warning("Project Helper admin notification was not sent to %s", session)
             except Exception as exc:
                 logger.warning("Project Helper admin notification failed for %s: %s", session, exc)
+
+    async def _ensure_qa_record(
+        self,
+        project: ProjectBinding,
+        messages: list[BufferedMessage],
+        answer: str,
+    ) -> None:
+        question = self._question_title(messages)
+        if not question:
+            return
+        try:
+            qa_tools = QAMemoryTools(self._qa_path(project), project_label=project.label())
+            if await self._qa_has_question(qa_tools, question):
+                return
+            result = await qa_tools.qa_upsert(
+                question=question,
+                answer=answer,
+                evidence="自动记录：机器人已在群内回复该问题。",
+                tags="auto",
+            )
+            logger.info("Project Helper QA fallback write: %s", result)
+        except Exception as exc:
+            logger.warning("Project Helper QA fallback write failed: %s", exc, exc_info=True)
+
+    async def _qa_has_question(self, qa_tools: QAMemoryTools, question: str) -> bool:
+        if not qa_tools.qa_path.exists():
+            return False
+        content = await qa_tools.qa_read()
+        return f"### {question}" in content
+
+    def _question_title(self, messages: list[BufferedMessage]) -> str:
+        text = " / ".join(
+            (item.text or item.outline).strip()
+            for item in messages
+            if (item.text or item.outline).strip()
+        )
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return ""
+        return text[:80].rstrip()
 
     def _remember_answer(
         self,
