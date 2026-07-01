@@ -404,7 +404,6 @@ class ProjectHelperPlugin(Star):
             answer = answer[: self.config.max_answer_chars].rstrip() + "\n...后面略了，我先把关键结论放上面。"
         await event.send(MessageChain([Plain(answer)]))
         self._remember_answer(event, project, messages, answer)
-        await self._ensure_qa_record(project, messages, answer)
 
     async def _ask_agent(
         self,
@@ -462,7 +461,9 @@ class ProjectHelperPlugin(Star):
             "如果管理员说法不对，就礼貌纠正并给出简短证据。"
             "你有一个项目 QA Markdown 记忆工具。开始调查代码前，优先读取/搜索 QA，看是否已有可靠答案；"
             "若 QA 已足够，直接基于 QA 回答。若 QA 不足或可能过期，再使用仓库只读工具查看目录、搜索代码、读取文件和 Markdown。"
-            "回答完一个可复用的问题后，用 QA 工具把结论、适用条件和关键依据写回 Markdown；不要记录闲聊或不确定结论。"
+            "如果调查得到的结论可复用、已确认、以后群友可能还会问，应该先用 qa_upsert 把问题、简短答案、适用条件和关键依据写回 QA，再给最终 JSON 回复。"
+            "不要为了闲聊、临时猜测、低置信度结论、已被群友解答的问题写 QA；QA 不是聊天流水账。"
+            "如果 QA 文件不存在，qa_read/qa_search 返回空或不存在是正常情况；不要反复读取 QA，直接调查仓库，需要沉淀时调用一次 qa_upsert 即可。"
             "仓库工具只读；不要要求用户理解代码实现，除非这是解决问题必须的信息。"
             "语气自然、像群友，直接给结论，少说流程。"
             "不要说“这个问题明显是项目相关的”“我来回答”“我去查一下”这类暴露判断过程或机器人身份的开场白。"
@@ -731,46 +732,6 @@ class ProjectHelperPlugin(Star):
                     logger.warning("Project Helper admin notification was not sent to %s", session)
             except Exception as exc:
                 logger.warning("Project Helper admin notification failed for %s: %s", session, exc)
-
-    async def _ensure_qa_record(
-        self,
-        project: ProjectBinding,
-        messages: list[BufferedMessage],
-        answer: str,
-    ) -> None:
-        question = self._question_title(messages)
-        if not question:
-            return
-        try:
-            qa_tools = QAMemoryTools(self._qa_path(project), project_label=project.label())
-            if await self._qa_has_question(qa_tools, question):
-                return
-            result = await qa_tools.qa_upsert(
-                question=question,
-                answer=answer,
-                evidence="自动记录：机器人已在群内回复该问题。",
-                tags="auto",
-            )
-            logger.info("Project Helper QA fallback write: %s", result)
-        except Exception as exc:
-            logger.warning("Project Helper QA fallback write failed: %s", exc, exc_info=True)
-
-    async def _qa_has_question(self, qa_tools: QAMemoryTools, question: str) -> bool:
-        if not qa_tools.qa_path.exists():
-            return False
-        content = await qa_tools.qa_read()
-        return f"### {question}" in content
-
-    def _question_title(self, messages: list[BufferedMessage]) -> str:
-        text = " / ".join(
-            (item.text or item.outline).strip()
-            for item in messages
-            if (item.text or item.outline).strip()
-        )
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
-            return ""
-        return text[:80].rstrip()
 
     def _remember_answer(
         self,
