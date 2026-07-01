@@ -482,7 +482,7 @@ def _messages_to_trace(messages: list[BufferedMessage]) -> list[dict[str, Any]]:
     "astrbot_plugin_project_helper",
     "JunieXD",
     "Use an AstrBot agent to inspect a GitHub repository and answer project questions in group chat.",
-    "0.4.1",
+    "0.4.2",
 )
 class ProjectHelperPlugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
@@ -609,7 +609,7 @@ class ProjectHelperPlugin(Star):
         project = self._project_for_event(event)
         if not self._should_watch(event, project):
             return
-        if event.get_message_str().lstrip().startswith("/"):
+        if self._is_command_message(event):
             return
         if self.config.respond_when_mentioned_only and not (
             event.is_wake_up() or event.is_at_or_wake_command
@@ -892,7 +892,7 @@ class ProjectHelperPlugin(Star):
         if handler is None:
             raise RuntimeError(f"Tool {name} has no handler.")
 
-        async def traced_handler(**kwargs: object) -> str:
+        async def traced_handler(_event: AstrMessageEvent | None = None, **kwargs: object) -> str:
             async def call() -> str:
                 result = handler(**kwargs)
                 if hasattr(result, "__await__"):
@@ -1228,6 +1228,22 @@ class ProjectHelperPlugin(Star):
         if event.get_sender_id() == event.get_self_id():
             return False
         return True
+
+    def _is_command_message(self, event: AstrMessageEvent) -> bool:
+        candidates = [
+            event.get_message_str(),
+            event.get_message_outline(),
+        ]
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if not text:
+                continue
+            normalized = text.lstrip()
+            if normalized.startswith("/"):
+                return True
+            if normalized.startswith("ph ") or normalized == "ph":
+                return True
+        return False
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
         try:
