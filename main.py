@@ -490,6 +490,7 @@ class ProjectHelperPlugin(Star):
             f"目标仓库本地路径：{repo_root}",
             f"QA Markdown 路径：{self._qa_path(project)}",
             f"平台会话：{event.unified_msg_origin}",
+            f"本轮最多可调用工具 {self.config.max_tool_calls} 次；请控制调查范围，先查 QA，再用少量仓库搜索定位答案。若结论需要沉淀，请在最终 JSON 前预留一次 qa_upsert。",
         ]
         if project.project_prompt:
             lines.extend(
