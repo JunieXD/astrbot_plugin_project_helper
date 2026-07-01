@@ -114,6 +114,7 @@ class AgentTraceRecorder:
         self.user_prompt = ""
         self.raw_response = ""
         self.parsed_response: dict[str, Any] | None = None
+        self.agent_attempts: list[dict[str, Any]] = []
         self.post_check: dict[str, Any] | None = None
         self.final_state: dict[str, Any] = {}
 
@@ -184,6 +185,24 @@ class AgentTraceRecorder:
         self.raw_response = raw_response
         self.final_state = final_state
 
+    def record_agent_attempt(
+        self,
+        *,
+        name: str,
+        raw_response: str,
+        parsed_response: dict[str, Any] | None,
+        error: str = "",
+    ) -> None:
+        self.agent_attempts.append(
+            {
+                "name": name,
+                "created_at": _format_ts(),
+                "raw_response": _clip_text(raw_response, 12000),
+                "parsed_response": parsed_response,
+                "error": error,
+            }
+        )
+
     def to_payload(
         self,
         *,
@@ -226,6 +245,7 @@ class AgentTraceRecorder:
             "agent": {
                 "raw_response": _clip_text(self.raw_response, 20000),
                 "parsed_response": self.parsed_response,
+                "attempts": self.agent_attempts,
             },
             "post_check": self.post_check,
             "final": self.final_state,
@@ -462,7 +482,7 @@ def _messages_to_trace(messages: list[BufferedMessage]) -> list[dict[str, Any]]:
     "astrbot_plugin_project_helper",
     "JunieXD",
     "Use an AstrBot agent to inspect a GitHub repository and answer project questions in group chat.",
-    "0.4.0",
+    "0.4.1",
 )
 class ProjectHelperPlugin(Star):
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
@@ -795,8 +815,73 @@ class ProjectHelperPlugin(Star):
         parsed = self._parse_agent_json(raw)
         if parsed is None:
             logger.warning("Project Helper agent returned non-JSON response: %s", raw)
-            parsed = {"reply": True, "answer": raw, "confidence": "low", "reason": "non_json_agent_response"}
+            trace.record_agent_attempt(
+                name="tool_loop_agent",
+                raw_response=raw,
+                parsed_response=None,
+                error="non_json_agent_response",
+            )
+            parsed = await self._repair_agent_json(event, provider_id, raw, trace)
+            if parsed is None:
+                parsed = {
+                    "reply": False,
+                    "answer": "",
+                    "confidence": "low",
+                    "reason": "non_json_agent_response_suppressed",
+                }
+        else:
+            trace.record_agent_attempt(
+                name="tool_loop_agent",
+                raw_response=raw,
+                parsed_response=parsed,
+            )
         trace.parsed_response = parsed
+        return parsed
+
+    async def _repair_agent_json(
+        self,
+        event: AstrMessageEvent,
+        provider_id: Any,
+        raw_response: str,
+        trace: AgentTraceRecorder,
+    ) -> dict[str, Any] | None:
+        prompt = (
+            "下面是一个项目群答疑 Agent 的错误输出。它没有遵守最终 JSON 协议。\n"
+            "请只做格式修复：如果原文里包含明确应该发送给群友的答案，把它放进 answer；"
+            "如果原文只是错误、道歉、工具链失败、无法验证或泛泛猜测，返回 reply=false。\n"
+            "只能输出一个 JSON 对象，不要 Markdown 代码块："
+            "{\"reply\": boolean, \"answer\": string, \"confidence\": \"low|medium|high\", \"reason\": string}。\n\n"
+            f"原始输出：\n{_clip_text(raw_response, 12000)}"
+        )
+        try:
+            response = await asyncio.wait_for(
+                self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    system_prompt=(
+                        "你是严格 JSON 格式修复器。不要补充新事实，不要改写成教程，"
+                        "只把已有内容转换成指定 JSON。无法可靠转换时 reply=false。"
+                    ),
+                    prompt=prompt,
+                ),
+                timeout=min(30.0, self.config.agent_timeout_seconds),
+            )
+        except Exception as exc:
+            trace.record_agent_attempt(
+                name="json_repair",
+                raw_response="",
+                parsed_response=None,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+
+        repaired_raw = str(getattr(response, "completion_text", "") or "").strip()
+        parsed = self._parse_agent_json(repaired_raw)
+        trace.record_agent_attempt(
+            name="json_repair",
+            raw_response=repaired_raw,
+            parsed_response=parsed,
+            error="" if parsed is not None else "invalid_json_after_repair",
+        )
         return parsed
 
     def _wrap_tool(self, tool: FunctionTool, trace: AgentTraceRecorder) -> FunctionTool:
@@ -857,6 +942,7 @@ class ProjectHelperPlugin(Star):
             "不要说“这个问题明显是项目相关的”“我来回答”“我去查一下”这类暴露判断过程或机器人身份的开场白。"
             "不要把回答写成泛泛的客服排查清单；先给项目内真实存在的页面、按钮、状态、限制和推荐操作，再补充必要的排查项。"
             "如果仓库里能查到具体机制，就不要凭通用经验猜测；不确定的原因要明确说“可能”，不要编造项目能力或限制。"
+            "如果你没有成功读取 QA 或仓库，且问题需要项目事实验证，不要用通用经验凑答案；返回 reply=false，并在 reason 里说明缺少可靠项目依据。"
             "用户问“怎么办”时，优先回答下一步该怎么操作；最后只问一个最关键的补充信息，不要连续追问多个问题。"
             f"回复风格要求：{self.config.answer_style_prompt}"
             f"{sources_rule}"
