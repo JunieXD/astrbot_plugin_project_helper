@@ -30,6 +30,14 @@ from .repo_tools import QAMemoryTools, RepositoryTools
 PLUGIN_NAME = "astrbot_plugin_project_helper"
 ANSWER_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 RECENT_ANSWER_TTL_SECONDS = 3600.0
+DEFAULT_ANSWER_STYLE_PROMPT = (
+    "像项目群里一个熟悉项目的真人群友在顺手回复。"
+    "默认 1 到 4 句话，除非用户明确要教程，不要写长篇编号列表。"
+    "先给结论或下一步操作，再补一句原因；语气轻松、直接、有边界，不要客服腔。"
+    "可以说“先看这个”“一般是这样”“这个不用重抓整站”，不要说“建议您按照以下步骤”。"
+    "示例好回复：先看缺邮箱候选有没有个人主页链接。有的话在抓取审核页选中它，点补全导师资料，系统会进详情页继续找邮箱。"
+    "示例差回复：好的，这个问题明显是项目相关的，我来回答。常见原因如下：1...2...3..."
+)
 
 
 @dataclass(frozen=True)
@@ -96,7 +104,8 @@ class ProjectHelperConfig:
     admin_qqs: tuple[str, ...] = ()
     buffer_seconds: float = 15.0
     max_buffer_messages: int = 20
-    max_answer_chars: int = 1800
+    max_answer_chars: int = 700
+    answer_style_prompt: str = DEFAULT_ANSWER_STYLE_PROMPT
     agent_timeout_seconds: float = 300.0
     tool_timeout_seconds: int = 30
     max_tool_calls: int = 25
@@ -116,7 +125,10 @@ class ProjectHelperConfig:
             admin_qqs=_as_string_tuple(data.get("admin_qqs") or data.get("admin_qq_ids")),
             buffer_seconds=_as_float(data.get("buffer_seconds"), 15.0, 1.0, 180.0),
             max_buffer_messages=_as_int(data.get("max_buffer_messages"), 20, 1, 100),
-            max_answer_chars=_as_int(data.get("max_answer_chars"), 1800, 200, 8000),
+            max_answer_chars=_as_int(data.get("max_answer_chars"), 700, 200, 8000),
+            answer_style_prompt=str(
+                data.get("answer_style_prompt") or DEFAULT_ANSWER_STYLE_PROMPT
+            ).strip(),
             agent_timeout_seconds=_as_float(data.get("agent_timeout_seconds"), 300.0, 20.0, 1200.0),
             tool_timeout_seconds=_as_int(data.get("tool_timeout_seconds"), 30, 5, 300),
             max_tool_calls=_as_int(data.get("max_tool_calls"), 25, 1, 80),
@@ -456,6 +468,7 @@ class ProjectHelperPlugin(Star):
             "不要把回答写成泛泛的客服排查清单；先给项目内真实存在的页面、按钮、状态、限制和推荐操作，再补充必要的排查项。"
             "如果仓库里能查到具体机制，就不要凭通用经验猜测；不确定的原因要明确说“可能”，不要编造项目能力或限制。"
             "用户问“怎么办”时，优先回答下一步该怎么操作；最后只问一个最关键的补充信息，不要连续追问多个问题。"
+            f"回复风格要求：{self.config.answer_style_prompt}"
             f"{sources_rule}"
             "最终只能输出一个 JSON 对象，不要输出 Markdown 代码块："
             "{\"reply\": boolean, \"answer\": string, \"confidence\": \"low|medium|high\", \"reason\": string}。"

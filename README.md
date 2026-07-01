@@ -57,6 +57,8 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 - `admin_qqs`: 处理失败时私聊通知的管理员 QQ 号列表；未配置则只写日志，不会在群里报错
 - `buffer_seconds`: 多条消息聚合等待时间，默认 15 秒
 - `max_buffer_messages`: 一次聚合最多保留的消息数，默认 20 条
+- `max_answer_chars`: 单次群回复最大字符数，默认 700，避免群聊里输出长篇
+- `answer_style_prompt`: 群聊回复语气提示词，默认会要求 Agent 像熟悉项目的真人群友一样短句回复
 - `max_tool_calls`: 单次 Agent 最多工具调用轮数，默认 25
 - `send_typing`: Agent 调查期间显示平台的“正在输入”状态，不会额外发送文字消息
 - `auto_update_repo`: 每次回答前是否自动 `git fetch/pull`，默认开启
