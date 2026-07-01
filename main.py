@@ -1124,8 +1124,8 @@ class ProjectHelperPlugin(Star):
     def _trace_archive_path(self, project: ProjectBinding, run_id: str) -> Path:
         return self.trace_base_dir / self._safe_project_trace_name(project) / f"{run_id}.json"
 
-    def _lock_for_project(self, project: ProjectBinding) -> asyncio.Lock:
-        key = self._project_key(project)
+    def _lock_for_repo_root(self, repo_root: Path) -> asyncio.Lock:
+        key = str(repo_root.resolve())
         lock = self._repo_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
@@ -1287,8 +1287,8 @@ class ProjectHelperPlugin(Star):
         return sanitized or "target_repo"
 
     async def _ensure_repo(self, project: ProjectBinding, *, update: bool) -> Path:
-        async with self._lock_for_project(project):
-            repo_root = self._repo_root(project)
+        repo_root = self._repo_root(project)
+        async with self._lock_for_repo_root(repo_root):
             if repo_root.exists() and (repo_root / ".git").exists():
                 if update:
                     await asyncio.to_thread(self._git_update, project, repo_root)

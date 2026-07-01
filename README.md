@@ -68,6 +68,8 @@ git clone https://github.com/JunieXD/astrbot_plugin_project_helper.git
 
 项目显示名不需要单独配置，插件会直接使用 GitHub 仓库名。首次处理对应群的问题或执行 `/ph update` 时，插件会把仓库克隆到本地 `repo_path`；后续 Agent 通过只读工具检索这个本地 checkout 的代码和 Markdown。
 
+如果多个 QQ 群绑定同一个仓库并使用同一个本地 `repo_path`，插件会按本地仓库路径串行执行 clone/fetch/pull，避免两个群同时更新同一个 checkout 时触发 git 锁冲突；各群的消息缓冲、Agent 运行和 trace 仍然按群隔离。
+
 QA Markdown 不会记录每条群回复。Agent 会被要求在结论可复用、已确认、以后群友可能还会问时主动调用 `qa_upsert` 沉淀问答；闲聊、低置信度结论或已被群友解答的问题不会写入。
 
 管理员命令：
